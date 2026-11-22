@@ -1,0 +1,38 @@
+name: Publish
+
+# Publishes the package to npm (and so to unpkg and jsDelivr) when a GitHub Release is published.
+# Uses npm trusted publishing (OIDC): no npm token is stored in the repository.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write # for trusted publishing and provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - run: npm ci
+
+      - name: Check that the release tag matches the package version
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$version" != "$tag" ]; then
+            echo "Release tag $GITHUB_REF_NAME does not match package.json version $version" >&2
+            exit 1
+          fi
+
+      # prepublishOnly runs the type check and the build.
+      # Provenance can only be generated in CI, so it is requested here rather than in package.json.
+      - run: npm publish --provenance
