@@ -1,0 +1,21 @@
+{
+  "name": "api-viewer",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite build --watch",
+    "start": "node server/server.ts spec/openapi.json spec/asyncapi.yaml",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "js-yaml": "5.5.0",
+    "preact": "^11.2.0"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.6",
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8"
+  }
+}
