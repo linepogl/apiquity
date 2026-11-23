@@ -95,15 +95,14 @@ does the same with `spec/openapi.json` and `spec/asyncapi.yaml` (the `spec/` fol
 
 ## Releasing
 
-Publishing a GitHub Release publishes the package to npm (and so to unpkg), through the `Publish` workflow and npm's
-trusted publishing. The release tag must match the version in `package.json` (`1.2.3` or `v1.2.3`):
+Releases are published to npm (and so to unpkg) by hand:
 
 ```sh
-npm version patch    # or minor / major: updates package.json and creates the tag
-git push --follow-tags
+npm version patch    # or minor / major: updates package.json and creates the git tag
+npm run release      # type-checks, builds, publishes to npm, then pushes the commit and the tag
 ```
 
-then create the GitHub Release from that tag.
+`npm publish` asks for a one-time password when two-factor authentication is on.
 
 ## License
 
