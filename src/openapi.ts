@@ -82,7 +82,7 @@ export function compareEndpoints(a: Endpoint, b: Endpoint): number {
   return a.path.localeCompare(b.path) || HTTP_METHODS.indexOf(a.method) - HTTP_METHODS.indexOf(b.method);
 }
 
-/** Group endpoints by their first tag, in the order of the document's `tags` list. */
+/** Group endpoints by their first tag; groups sorted alphabetically. The document's `tags` give their descriptions. */
 export function groupByTag(doc: OpenApiDoc): EndpointGroup[] {
   const groups = new Map<string, EndpointGroup>();
   for (const t of doc.tags ?? []) groups.set(t.name, { tag: t.name, description: t.description, endpoints: [] });
@@ -92,7 +92,7 @@ export function groupByTag(doc: OpenApiDoc): EndpointGroup[] {
     groups.get(tag)!.endpoints.push(ep);
   }
   for (const g of groups.values()) g.endpoints.sort(compareEndpoints);
-  return [...groups.values()].filter((g) => g.endpoints.length > 0);
+  return [...groups.values()].filter((g) => g.endpoints.length > 0).sort((a, b) => a.tag.localeCompare(b.tag));
 }
 
 /** URL anchor for an endpoint, e.g. "get/api/vehicles/{id}". Method + path is unique within a document. */

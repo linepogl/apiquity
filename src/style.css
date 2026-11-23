@@ -1,21 +1,33 @@
 :host {
   display: block;
   --bg: #fafafa; --fg: #1f2328; --muted: #656d76; --border: #d0d7de; --row: #fff; --hover: #f3f4f6; --sel: #ddf4ff;
-  --get: #1f6feb; --post: #1a7f37; --put: #9a6700; --patch: #8250df; --delete: #cf222e; --other: #57606a;
+  --get: #1f6feb; --post: #1a7f37; --put: #9a6700; --patch: #8250df; --delete: #cf222e; --other: #57606a; --envelope: #fff;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   color: var(--fg); background: var(--bg);
 }
 @media (prefers-color-scheme: dark) {
   :host { --bg: #0d1117; --fg: #e6edf3; --muted: #8d96a0; --border: #30363d; --row: #161b22; --hover: #1f2630; --sel: #1f2d3f;
-    --get: #4493f8; --post: #3fb950; --put: #d29922; --patch: #a371f7; --delete: #f85149; --other: #8d96a0; }
+    --get: #4493f8; --post: #3fb950; --put: #d29922; --patch: #a371f7; --delete: #f85149; --other: #8d96a0; --envelope: #3d444d; }
 }
+/* At least as tall as the split view, so the background fills the window even when the content is short. */
+.host { min-height: var(--apiquity-ui-height, 100vh); }
 a { color: inherit; text-decoration: none; }
-.layout { max-width: 1000px; margin: 0 auto; padding: 24px 16px 64px; }
-.home:hover { text-decoration: underline; }
-header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; border-bottom: 1px solid var(--border); padding-bottom: 12px; }
-h1 { margin: 0; font-size: 1.6rem; }
-.version { color: var(--muted); font-weight: 400; font-size: 1rem; }
+/* The title bar spans the whole width, as in the split view; the home page's list stays centered below it. */
+.layout:not(.split) > nav { max-width: 1000px; margin: 0 auto; padding: 8px 16px 64px; }
+.results-title { margin: 20px 0 0; font-size: 1.1rem; color: var(--muted); }
+/* On the home page the window scrolls, so the title bar sticks to its top. */
+.layout:not(.split) > header { position: sticky; top: 0; z-index: 1; }
+/* Title bar: the API title on the left, and the search box on the right. */
+header {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  background: var(--row); border-bottom: 1px solid var(--border); padding: 8px 16px;
+}
+.app-title { color: var(--fg); font-size: 1.1rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .badge { font-size: .75rem; border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px; color: var(--muted); }
+/* Spec format tags in the title bar: links to each spec's source; the open one outlined in the text color. */
+.source-tag { white-space: nowrap; }
+.source-tag:hover { color: var(--fg); background: var(--hover); }
+.source-tag.active { color: var(--fg); border-color: var(--fg); font-weight: 600; }
 h2 { margin: 28px 0 8px; font-size: 1.15rem; }
 .desc { color: var(--muted); margin: 0 0 8px; }
 .endpoints { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
@@ -24,10 +36,20 @@ h2 { margin: 28px 0 8px; font-size: 1.15rem; }
 .endpoints a:hover { background: var(--hover); }
 .endpoints li.selected a { background: var(--sel); box-shadow: inset 3px 0 0 var(--get); }
 .endpoints li:first-child { border-top: 0; }
-.method { flex: none; width: 64px; text-align: center; font: 700 .75rem ui-monospace, monospace; color: #fff; border-radius: 4px; padding: 3px 0; background: var(--other); }
-.m-get { background: var(--get); } .m-post { background: var(--post); } .m-put { background: var(--put); }
-.m-patch { background: var(--patch); } .m-delete { background: var(--delete); }
+/* Verb badges: the "flattastic" palette (darker shade of each pair), the same in light and dark mode.
+   Text elsewhere (links, response tabs…) keeps the --get, --post… colors, which read better as text. */
+.method { flex: none; width: 64px; text-align: center; font: 700 .75rem ui-monospace, monospace; color: #fff; border-radius: 4px; padding: 3px 0; background: #434a54; }
+.m-get { background: #4a89dc; } .m-post { background: #8cc152; } .m-put { background: #f6bb42; }
+.m-patch { background: #967adc; } .m-delete { background: #da4453; }
 .path { font: .9rem ui-monospace, monospace; word-break: break-all; }
+.op-name { display: flex; align-items: center; min-width: 0; }
+/* An envelope, drawn, so that it sits exactly in the middle of the row whatever the fonts. */
+.op-icon { flex: none; display: block; color: var(--muted); margin-right: 4px; }
+/* The envelope's paper: white, or a soft grey on dark backgrounds. */
+.op-icon-paper { fill: var(--envelope); }
+/* A message's tab in an operation: the envelope before its name. */
+.message-tab { display: inline-flex; align-items: center; gap: 4px; }
+.message-tab .op-icon { width: 17px; height: 13px; position: relative; top: 1px; }
 .summary { margin-left: auto; color: var(--muted); font-size: .85rem; text-align: right; }
 .deprecated .path { text-decoration: line-through; color: var(--muted); }
 .msg { padding: 24px; } .error { color: var(--delete); }
@@ -37,27 +59,42 @@ h2 { margin: 28px 0 8px; font-size: 1.15rem; }
    --apiquity-ui-height when the host page sets it (e.g. to embed the viewer in part of a page). */
 .layout.split {
   max-width: none; padding: 0; height: var(--apiquity-ui-height, 100vh);
-  display: grid; grid-template-columns: minmax(360px, 500px) 1fr; grid-template-rows: auto 1fr;
+  display: grid; grid-template-columns: minmax(360px, 500px) minmax(900px, 1fr); grid-template-rows: auto 1fr;
 }
-.split header { grid-column: 1 / -1; padding: 12px 16px; }
-.download { margin-left: auto; font-size: .85rem; color: var(--get); }
-.download:hover { text-decoration: underline; }
-.split h1 { font-size: 1.25rem; }
+.split header { grid-column: 1 / -1; }
+.layout.split.no-list { grid-template-columns: minmax(0, 1fr); }
+/* The spec file's link, at the right of the home page header. */
+.file-link { margin-left: auto; font-size: .85rem; color: var(--get); }
+/* Search box: fills the free space of the title bar, up to a comfortable width, with a magnifying glass inside. */
+.search-box { position: relative; display: flex; flex: 1 1 200px; max-width: 360px; margin-left: auto; min-width: 0; }
+.search-icon { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
+.search {
+  flex: 1; min-width: 0;
+  font: .85rem system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--fg);
+  background: var(--row); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px 5px 29px;
+}
+.search:focus { outline: 2px solid var(--sel); border-color: var(--get); }
+.file-link:hover { text-decoration: underline; }
 .split nav { overflow-y: auto; border-right: 1px solid var(--border); padding: 0 12px 24px; }
 .split nav h2 { margin-top: 16px; font-size: .95rem; }
-.split .endpoints a { gap: 8px; padding: 6px 8px; }
-.split .endpoints .method { width: 52px; font-size: .7rem; }
-.split .endpoints .path { font-size: .8rem; }
-.split .endpoints .summary { display: none; }
+.split nav .endpoints a { gap: 8px; padding: 6px 8px; }
+.split nav .endpoints .method { width: 52px; font-size: .7rem; }
+.split nav .endpoints .path { font-size: .8rem; }
+.split nav .endpoints .summary { display: none; }
 .panel { overflow-y: auto; padding: 24px 32px 64px; }
 .panel-title { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 0 0 16px; font-size: 1.1rem; }
 .panel-title .path { font-size: 1.05rem; }
 .panel-summary { font-size: 1.05rem; margin: 0 0 12px; }
 .description { white-space: pre-wrap; line-height: 1.5; }
 .empty { color: var(--muted); font-style: italic; }
+/* The main area needs at least 900px: below 360 + 900px (the viewer's width, not the window's, so
+   this also holds when it is embedded), the list column is hidden and the main area takes it all. */
+.app { container: app / inline-size; }
+@container app (max-width: 1259px) {
+  .layout.split { grid-template-columns: minmax(0, 1fr); }
+  .split nav { display: none; }
+}
 @media (max-width: 760px) {
-  .layout.split { display: block; height: auto; }
-  .split nav { border-right: 0; border-bottom: 1px solid var(--border); max-height: 40vh; }
   .panel { padding: 16px; --panel-x: 16px; }
 }
 
@@ -87,6 +124,8 @@ h2 { margin: 28px 0 8px; font-size: 1.15rem; }
 .row-type { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .meta-label { color: var(--muted); margin-right: 2px; }
 .value { font: .75rem ui-monospace, monospace; background: var(--hover); border-radius: 4px; padding: 1px 5px; word-break: break-all; }
+/* Envelope metadata around a message's content: dimmed. */
+.schema-row.envelope { background: color-mix(in srgb, var(--row), var(--hover) 50%); }
 .schema-row.deprecated > .row-head .prop { text-decoration: line-through; color: var(--muted); }
 
 /* Array items, framed as [ … ] */
@@ -101,6 +140,8 @@ h2 { margin: 28px 0 8px; font-size: 1.15rem; }
 /* oneOf / anyOf alternatives as tabs */
 .row-nested > .variants { margin: 0 16px 0 32px; }
 .array-item > .variants { margin: 2px 0 4px; }
+/* White like the other panels; the active tab has the same background, so the two join up. */
+.variants > .tab-panel { background: var(--row); }
 .tabs { display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--border); }
 .tab {
   font: .8rem ui-monospace, monospace; color: var(--muted); background: none; cursor: pointer;
@@ -137,6 +178,16 @@ h2 { margin: 28px 0 8px; font-size: 1.15rem; }
 .view-toggle button:hover { color: var(--fg); background: var(--hover); }
 .view-toggle button.active { color: var(--fg); background: var(--sel); font-weight: 600; }
 .raw-schema { margin: 0; padding: 12px 16px; font: .8rem/1.45 ui-monospace, monospace; background: var(--row); border: 1px solid var(--border); border-radius: 8px; overflow: auto; max-height: 70vh; }
+/* A whole spec file: right on the page's background, as long as it is (the page area scrolls). */
+.raw-schema.source { max-height: none; padding: 0; background: none; border: 0; border-radius: 0; }
+/* Download button over a spec's source: square, floating at the top right, staying there while the file
+   scrolls (the anchor takes no room, so the file starts at the top). */
+.source-download-anchor { position: sticky; top: 0; height: 0; z-index: 1; }
+.source-download {
+  position: absolute; top: 0; right: 0; display: flex; align-items: center; justify-content: center; box-sizing: border-box; width: 36px; height: 36px;
+  color: var(--muted); background: var(--row); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 1px 4px rgb(0 0 0 / .12);
+}
+.source-download:hover { color: var(--fg); background: var(--hover); }
 .meta-grid { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: baseline; gap: 6px 8px; font-size: .8rem; }
 .meta-grid > .meta-label { margin-right: 0; }
 .meta-values { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
@@ -153,16 +204,10 @@ h2 { margin: 28px 0 8px; font-size: 1.15rem; }
 .row-head .const-value { margin-left: -2px; font-size: .8rem; }
 .tab-chip { margin-left: 6px; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; font-weight: 400; }
 
-/* OpenAPI | AsyncAPI tabs: the top bar, across the whole window */
-.spec-tabs { padding: 8px 16px 0; background: var(--row); justify-content: center; }
-.spec-tabs .tab { font: 600 .9rem system-ui, -apple-system, "Segoe UI", sans-serif; padding: 8px 16px; }
-.spec-tabs .tab.active { background: var(--bg); }
-/* With an endpoint open, the page is a fixed-height column: tab bar, then the split view filling the rest. */
+/* With an endpoint open, the page is a fixed-height column and the split view fills it. */
 .app-split { height: var(--apiquity-ui-height, 100vh); display: flex; flex-direction: column; }
 .app-split > .layout.split { flex: 1; min-height: 0; height: auto; margin: 0; }
 
 /* AsyncAPI operations in the list */
-.m-send { background: var(--post); } .m-receive { background: var(--get); }
-.namespace { font-family: ui-monospace, monospace; font-size: 1rem; word-break: break-all; }
-.mt-event { background: var(--patch); } .mt-command { background: var(--put); }
+.m-send { background: #3bafda; } .m-receive { background: #e9573f; }
 .chip.chip-required { color: var(--delete); border-color: var(--delete); }

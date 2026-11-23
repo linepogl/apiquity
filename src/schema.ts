@@ -56,6 +56,8 @@ export interface SchemaNode {
   /** Alternatives left after removing the `null` option from oneOf/anyOf. */
   variants?: { kind: "oneOf" | "anyOf"; nodes: SchemaNode[] };
   missingRef?: string;
+  /** Tab label when the node is an alternative without a title or component name, e.g. "object". */
+  label?: string;
 }
 
 const isNullSchema = (s: any) => s && typeof s === "object" && (s.type === "null" || (Array.isArray(s.type) && s.type.length === 1 && s.type[0] === "null"));
@@ -100,13 +102,14 @@ function buildNode(doc: unknown, raw: unknown): SchemaNode {
     if (nonNull.length === 1 && types.length === 0) {
       // `oneOf: [X, null]` -> X, nullable. Outer keywords (description, default…) win.
       const inner = toNode(doc, nonNull[0]);
-      return {
+      const merged: SchemaNode = {
         ...inner,
         schema: { ...inner.schema, ...stripUndefined(outer) },
         typeName: inner.typeName ?? typeName,
         ref: inner.ref ?? ref,
         nullable: true,
       };
+      return splitByType(merged, kind);
     }
     return {
       schema: outer,
@@ -139,6 +142,18 @@ function buildNode(doc: unknown, raw: unknown): SchemaNode {
   return { schema: s, typeName, ref, types, nullable, missingRef: missing };
 }
 
+/**
+ * A oneOf/anyOf alternative that allows several JSON types, e.g. `oneOf: [{type: [object, array]}, null]`,
+ * is still a choice: one tab per type (object, array), the node itself staying nullable.
+ */
+function splitByType(node: SchemaNode, kind: "oneOf" | "anyOf"): SchemaNode {
+  if (node.variants || node.types.length < 2) return node;
+  // Keywords about the value as a whole stay on the node; each tab keeps the rest, with its one type.
+  const { title: _t, description: _d, default: _df, examples: _e, example: _ex, $id: _id, ...rest } = node.schema;
+  const nodes = node.types.map((t): SchemaNode => ({ schema: { ...rest, type: t }, types: [t], nullable: false, label: t }));
+  return { ...node, types: [], variants: { kind, nodes } };
+}
+
 function stripUndefined(o: JsonSchema): JsonSchema {
   return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined));
 }
@@ -151,6 +166,10 @@ export interface ChildRow {
   synthetic?: boolean;
   /** Shown instead of the schema's own description. */
   description?: string;
+  /** Starts expanded, e.g. the content of a message envelope. */
+  defaultOpen?: boolean;
+  /** Part of a message envelope (metadata around the content): shown dimmed. */
+  envelope?: boolean;
 }
 
 /**
@@ -165,6 +184,8 @@ export function childrenOf(doc: unknown, node: SchemaNode, direction: Direction 
   const s = node.schema;
   // Arrays have no rows of their own: their items are rendered separately (see itemsOf).
   if (node.types.includes("array")) return [];
+  // Nothing is known about the keys: rendered as `{ any }` rather than as rows (see isUnknownObject).
+  if (isUnknownObject(node)) return [];
   const rows: ChildRow[] = [];
   const required = new Set<string>(s.required ?? []);
   for (const [name, prop] of Object.entries<unknown>(s.properties ?? {})) {
@@ -181,6 +202,19 @@ export function childrenOf(doc: unknown, node: SchemaNode, direction: Direction 
     rows.push({ label: "...", node, synthetic: true, description });
   }
   return rows;
+}
+
+/**
+ * An object that says nothing about its keys or values: no properties, no key patterns, and any
+ * additional value allowed. Rendered as `{ any }`, the way an array without items reads `[ any ]`.
+ */
+export function isUnknownObject(node: SchemaNode): boolean {
+  const s = node.schema;
+  if (node.variants || node.types.length !== 1 || node.types[0] !== "object") return false;
+  if (Object.keys(s.properties ?? {}).length > 0 || s.patternProperties || s.propertyNames) return false;
+  if (s.unevaluatedProperties === false) return false;
+  const extra = s.additionalProperties;
+  return extra === undefined || extra === true || (typeof extra === "object" && extra !== null && Object.keys(extra).length === 0);
 }
 
 /**
@@ -211,7 +245,8 @@ const isFormattedString = (node: SchemaNode) =>
   typeof node.schema.format === "string" && (node.types.length === 0 || (node.types.length === 1 && node.types[0] === "string"));
 
 /** An array that must hold at least one item: its type reads "non-empty-array" instead of a chip. */
-const isNonEmptyArray = (node: SchemaNode) => !node.variants && node.types.includes("array") && node.schema.minItems === 1;
+const isNonEmptyArray = (node: SchemaNode) =>
+  !node.variants && node.types.length === 1 && node.types[0] === "array" && node.schema.minItems === 1;
 
 function baseType(node: SchemaNode): string {
   const type = rawBaseType(node);
@@ -221,8 +256,9 @@ function baseType(node: SchemaNode): string {
 function rawBaseType(node: SchemaNode): string {
   const s = node.schema;
   if (node.variants) return node.variants.kind;
-  // The item type is shown inside the [ … ] block when the row is opened.
-  if (node.types.includes("array")) return "array";
+  // The item type is shown inside the [ … ] block when the row is opened. Several types
+  // (e.g. object|array) fall through to the list of types below.
+  if (node.types.length === 1 && node.types[0] === "array") return "array";
   // A single possible value (shown next to the name): its JSON type adds nothing.
   if (s.const !== undefined) return "const";
   // The allowed values are listed below the row, so the underlying JSON type adds nothing.
@@ -279,7 +315,10 @@ export function discriminatorValues(
   doc: unknown,
   node: SchemaNode,
 ): { property: string; values: string[]; defaultIndex?: number } | undefined {
-  const d = node.schema.discriminator;
+  // OpenAPI: `{ propertyName, mapping?, defaultMapping? }`. AsyncAPI (and JSON Schema dialects that
+  // follow it): just the property name, `discriminator: type`.
+  const raw = node.schema.discriminator;
+  const d = typeof raw === "string" ? { propertyName: raw } : raw;
   if (!node.variants || typeof d?.propertyName !== "string") return undefined;
   const property: string = d.propertyName;
   const mapping: Record<string, string> = d.mapping ?? {};
@@ -287,18 +326,31 @@ export function discriminatorValues(
     // 1. The mapping: value -> $ref of the alternative.
     const mapped = Object.entries(mapping).find(([, ref]) => ref === v.ref)?.[0];
     if (mapped !== undefined) return JSON.stringify(mapped);
-    // 2. The alternative's own property: a const or a single-value enum.
-    const prop = v.schema.properties?.[property];
-    if (prop === undefined) return undefined;
-    const p = toNode(doc, prop).schema;
-    if (p.const !== undefined) return JSON.stringify(p.const);
-    if (Array.isArray(p.enum) && p.enum.length === 1) return JSON.stringify(p.enum[0]);
-    return undefined;
+    // 2. The alternative's own property: a const or a single-value enum, possibly in nested alternatives.
+    return propertyValue(doc, v, property);
   });
   if (!values.every((v) => v !== undefined)) return undefined;
   // The alternative picked when the property is missing or matches no mapping: `defaultMapping`.
   const index = typeof d.defaultMapping === "string" ? node.variants.nodes.findIndex((v) => v.ref === d.defaultMapping) : -1;
   return { property, values: values as string[], defaultIndex: index >= 0 ? index : undefined };
+}
+
+/**
+ * The single value an alternative gives a property, as JSON: from its own const or single-value enum,
+ * or else from its own alternatives when they all agree (e.g. a `photo` alternative that is itself a
+ * oneOf of interior, exterior and other photos, each with `type: photo`).
+ */
+function propertyValue(doc: unknown, node: SchemaNode, property: string, depth = 0): string | undefined {
+  const prop = node.schema.properties?.[property];
+  if (prop !== undefined) {
+    const p = toNode(doc, prop).schema;
+    if (p.const !== undefined) return JSON.stringify(p.const);
+    if (Array.isArray(p.enum) && p.enum.length === 1) return JSON.stringify(p.enum[0]);
+  }
+  if (!node.variants || depth > 8) return undefined;
+  const values = new Set(node.variants.nodes.map((n) => propertyValue(doc, n, property, depth + 1)));
+  const [value] = values;
+  return values.size === 1 ? value : undefined;
 }
 
 /** Marks a property that may be left out because the discriminator's `defaultMapping` picks its alternative then. */
@@ -323,12 +375,12 @@ export function withDiscriminatorDefault(doc: unknown, node: SchemaNode, propert
 }
 
 export function variantLabel(node: SchemaNode, index: number): string {
-  return node.schema.title ?? node.typeName ?? `option ${index + 1}`;
+  return node.schema.title ?? node.typeName ?? node.label ?? `option ${index + 1}`;
 }
 
 /** Whether a node has anything to show below its own details. */
 export function hasNested(doc: unknown, node: SchemaNode, direction: Direction = "request"): boolean {
-  return !!node.variants || itemsOf(doc, node) !== undefined || childrenOf(doc, node, direction).length > 0;
+  return !!node.variants || itemsOf(doc, node) !== undefined || isUnknownObject(node) || childrenOf(doc, node, direction).length > 0;
 }
 
 /**

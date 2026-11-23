@@ -7,6 +7,7 @@ import {
   childrenOf,
   constraints,
   hasNested,
+  isUnknownObject,
   itemsOf,
   toNode,
   typeSummary,
@@ -14,6 +15,7 @@ import {
   DEFAULT_MAPPING_MARK,
   discriminatorValues,
   withDiscriminatorDefault,
+  type ChildRow,
   type Direction,
   type SchemaNode,
 } from "./schema.ts";
@@ -150,13 +152,22 @@ function Details({ node, description, hideDefault }: { node: SchemaNode; descrip
 }
 
 /** Nested content of a node: alternatives as tabs, an array's items in [ ], or an object's rows in { }. */
-function Content({ doc, node, ancestors, exclude }: { doc: unknown; node: SchemaNode; ancestors: string[]; exclude?: ReadonlySet<string> }) {
+function Content({ doc, node, ancestors, exclude, envelope }: {
+  doc: unknown;
+  node: SchemaNode;
+  ancestors: string[];
+  exclude?: ReadonlySet<string>;
+  /** Look for a message envelope among the rows (see markEnvelope). */
+  envelope?: boolean;
+}) {
   const direction = useContext(DirectionContext);
   const inner = node.ref ? [...ancestors, node.ref] : ancestors;
   if (node.variants) return <Variants doc={doc} node={node} ancestors={inner} />;
   const items = itemsOf(doc, node);
   if (items) return <ArrayItems doc={doc} item={items} ancestors={inner} />;
-  const rows = exclude ? bodyRows(doc, node, direction, exclude) : childrenOf(doc, node, direction);
+  if (isUnknownObject(node)) return <AnyObject />;
+  const all = exclude ? bodyRows(doc, node, direction, exclude) : childrenOf(doc, node, direction);
+  const rows = envelope ? markEnvelope(all) : all;
   if (rows.length === 0) return null;
   // Framed by braces so it reads as `{ properties }`, like arrays read as `[ item ]`.
   return (
@@ -168,6 +179,19 @@ function Content({ doc, node, ancestors, exclude }: { doc: unknown; node: Schema
       <div class="bracket">{"}"}</div>
     </div>
   );
+}
+
+/** Property names that hold the actual content of a message wrapped in an envelope. */
+const ENVELOPE_CONTENT = ["payload", "body"];
+
+/**
+ * A message payload with a `payload` or `body` property is an envelope around that content: the
+ * content starts expanded, and the other properties (metadata) are marked to be shown dimmed.
+ */
+function markEnvelope(rows: ChildRow[]): ChildRow[] {
+  const content = ENVELOPE_CONTENT.map((name) => rows.find((r) => !r.synthetic && r.label === name)).find((r) => r !== undefined);
+  if (!content) return rows;
+  return rows.map((r) => (r === content ? { ...r, defaultOpen: true } : { ...r, envelope: true }));
 }
 
 /** oneOf / anyOf alternatives as horizontal tabs; the selected one is shown below. */
@@ -207,6 +231,21 @@ function Variants({ doc, node, ancestors }: { doc: unknown; node: SchemaNode; an
   );
 }
 
+/** An object nothing is known about, framed by braces so it reads as `{ any }`, like an untyped array's `[ any ]`. */
+function AnyObject() {
+  return (
+    <div class="object-block">
+      <div class="bracket">{"{"}</div>
+      <div class="array-item">
+        <div class="item-head">
+          <span class="type">any</span>
+        </div>
+      </div>
+      <div class="bracket">{"}"}</div>
+    </div>
+  );
+}
+
 /** An array's item schema, framed by brackets so it reads as `[ item ]`. */
 function ArrayItems({ doc, item, ancestors }: { doc: unknown; item: SchemaNode; ancestors: string[] }) {
   const direction = useContext(DirectionContext);
@@ -237,11 +276,13 @@ interface RowProps {
   deprecated?: boolean;
   /** $refs of the ancestors, to stop at recursive schemas. */
   ancestors: string[];
+  defaultOpen?: boolean;
+  envelope?: boolean;
 }
 
 /** One property / parameter. Clicking it reveals its details and nested content. */
-export function SchemaRow({ doc, label, node, required, synthetic, description, deprecated, ancestors }: RowProps) {
-  const [open, setOpen] = useState(false);
+export function SchemaRow({ doc, label, node, required, synthetic, description, deprecated, ancestors, defaultOpen, envelope }: RowProps) {
+  const [open, setOpen] = useState(!!defaultOpen);
   const recursive = node.ref !== undefined && ancestors.includes(node.ref);
   const direction = useContext(DirectionContext);
   // required / optional tags describe what a client must send; they are noise on responses. Except for a
@@ -250,7 +291,8 @@ export function SchemaRow({ doc, label, node, required, synthetic, description, 
   const showPresence = !synthetic && (direction === "request" || fromDefaultMapping);
   const nested = !recursive && hasNested(doc, node, direction);
   const isDeprecated = deprecated || node.schema.deprecated;
-  const isConst = node.schema.const !== undefined;
+  // A single possible value. `const|null` has two, so it reads like any other property.
+  const isConst = node.schema.const !== undefined && !node.nullable;
   // An optional constant with a default equal to the constant can really be omitted: `optional` and the
   // default stay. Any other case (no default, or a different one) makes both misleading, so both go.
   const optionalConst = isConst && !required && !synthetic;
@@ -262,7 +304,7 @@ export function SchemaRow({ doc, label, node, required, synthetic, description, 
   const type = `${typeSummary(doc, node)}${showPresence && !required && !hideOptional ? "|undefined" : ""}`;
 
   return (
-    <li class={`schema-row${isDeprecated ? " deprecated" : ""}`}>
+    <li class={`schema-row${isDeprecated ? " deprecated" : ""}${envelope ? " envelope" : ""}`}>
       {/* Only the name (and `optional` / `deprecated`) is shown; type, tags and details appear when the row is opened. */}
       <div class="row-head expandable" onClick={() => setOpen(!open)} role="button" aria-expanded={open}>
         <span class={synthetic ? "prop synthetic" : "prop"}>{label}{isConst && ":"}</span>
@@ -295,7 +337,7 @@ export function SchemaRows({ doc, rows, ancestors }: { doc: unknown; rows: Retur
   return (
     <ul class="schema">
       {rows.map((r) => (
-        <SchemaRow key={r.label} doc={doc} label={r.label} node={r.node} required={r.required} synthetic={r.synthetic} description={r.description} ancestors={ancestors} />
+        <SchemaRow key={r.label} doc={doc} label={r.label} node={r.node} required={r.required} synthetic={r.synthetic} description={r.description} ancestors={ancestors} defaultOpen={r.defaultOpen} envelope={r.envelope} />
       ))}
     </ul>
   );
@@ -303,7 +345,13 @@ export function SchemaRows({ doc, rows, ancestors }: { doc: unknown; rows: Retur
 
 /** A whole schema (request body): its top-level content, already expanded. */
 /** `exclude`: top-level properties not to show, e.g. those already listed as path or query parameters. */
-export function SchemaView({ doc, schema, exclude = new Set() }: { doc: unknown; schema: unknown; exclude?: ReadonlySet<string> }) {
+/** `envelope`: a message payload, whose `payload` / `body` property marks an envelope (see markEnvelope). */
+export function SchemaView({ doc, schema, exclude = new Set(), envelope }: {
+  doc: unknown;
+  schema: unknown;
+  exclude?: ReadonlySet<string>;
+  envelope?: boolean;
+}) {
   const direction = useContext(DirectionContext);
   const node = toNode(doc, schema);
   const isObject = node.types.includes("object") && !itemsOf(doc, node);
@@ -315,8 +363,8 @@ export function SchemaView({ doc, schema, exclude = new Set() }: { doc: unknown;
         <Chips node={node} />
       </div>
       {node.schema.description && <div class="row-desc"><Text>{node.schema.description}</Text></div>}
-      {isObject && bodyRows(doc, node, direction, exclude).length === 0 && <p class="empty">Empty object (no properties).</p>}
-      <Content doc={doc} node={node} ancestors={[]} exclude={exclude} />
+      {isObject && !isUnknownObject(node) && bodyRows(doc, node, direction, exclude).length === 0 && <p class="empty">Empty object (no properties).</p>}
+      <Content doc={doc} node={node} ancestors={[]} exclude={exclude} envelope={envelope} />
     </div>
   );
 }

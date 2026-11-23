@@ -1,9 +1,17 @@
 // AsyncAPI document helpers (3.x, with a fallback for 2.x).
 import { deref, withoutHashSuffix } from "./schema.ts";
 
+export interface AsyncTag {
+  name: string;
+  description?: string;
+}
+
 export interface AsyncApiDoc {
   asyncapi: string;
-  info: { title: string; version: string; description?: string };
+  /** 3.x: the document's tags are in `info.tags`. */
+  info: { title: string; version: string; description?: string; tags?: unknown[] };
+  /** 2.x: the document's tags. */
+  tags?: unknown[];
   channels?: Record<string, any>;
   operations?: Record<string, any>;
   components?: Record<string, any>;
@@ -34,6 +42,8 @@ export interface AsyncOperation {
   summary?: string;
   description?: string;
   deprecated?: boolean;
+  /** The operation's tags, $refs resolved; the first one groups the operation in the list. */
+  tags: AsyncTag[];
   messages: AsyncMessage[];
 }
 
@@ -41,6 +51,15 @@ export interface AsyncOperation {
 export const operationAnchor = (op: AsyncOperation) => `asyncapi/${op.id}`;
 
 const lastSegment = (ref: string | undefined) => ref?.split("/").pop()?.replace(/~1/g, "/").replace(/~0/g, "~");
+
+/** Tag objects (possibly $ref'd to `components.tags`), those without a name left out. */
+function toTags(doc: AsyncApiDoc, raw: unknown): AsyncTag[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((t) => deref<any>(doc, t).value)
+    .filter((t) => typeof t?.name === "string")
+    .map((t) => ({ name: t.name, description: t.description }));
+}
 
 /** A message object (possibly $ref'd) as shown in the panel. */
 function toMessage(doc: AsyncApiDoc, raw: unknown, fallbackKey: string): AsyncMessage {
@@ -82,6 +101,7 @@ export function listOperations(doc: AsyncApiDoc): AsyncOperation[] {
         summary: op.summary,
         description: op.description,
         deprecated: op.deprecated,
+        tags: toTags(doc, op.tags),
         messages,
       });
     }
@@ -100,6 +120,7 @@ export function listOperations(doc: AsyncApiDoc): AsyncOperation[] {
           address,
           summary: op.summary,
           description: op.description,
+          tags: toTags(doc, op.tags),
           messages: list.map((m, i) => toMessage(doc, m, list.length > 1 ? `message ${i + 1}` : "message")),
         });
       }
@@ -108,40 +129,36 @@ export function listOperations(doc: AsyncApiDoc): AsyncOperation[] {
   return out.sort((a, b) => a.address.localeCompare(b.address) || a.action.localeCompare(b.action));
 }
 
-/** Namespace of a channel address: everything before the last dot ("a.b.c" -> "a.b"), or "" when there is none. */
-export function namespaceOf(address: string): string {
-  const i = address.lastIndexOf(".");
-  return i > 0 ? address.slice(0, i) : "";
-}
-
-/** Name within the namespace: the last dot-separated segment ("a.b.c" -> "c"). */
+/** Last dot-separated segment of a channel address ("a.b.c" -> "c"). */
 export function localName(address: string): string {
   return address.slice(address.lastIndexOf(".") + 1);
 }
 
-/** Operations grouped by the namespace of their channel, namespaces sorted alphabetically. */
-export function groupByNamespace(doc: AsyncApiDoc): { namespace: string; operations: AsyncOperation[] }[] {
-  const groups = new Map<string, AsyncOperation[]>();
-  for (const op of listOperations(doc)) {
-    const ns = namespaceOf(op.address);
-    groups.set(ns, [...(groups.get(ns) ?? []), op]);
-  }
-  return [...groups.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([namespace, operations]) => ({ namespace, operations }));
+export interface OperationGroup {
+  tag: string;
+  operations: AsyncOperation[];
 }
+
+/** Group of the operations left without any tag. */
+const UNTAGGED = "default";
 
 /**
- * Channel addresses follow `<company>.<product>.<message_type>.<module>.<message_name>`.
- * The message type, as a badge label: "domain_event" -> EVENT, "command" -> COMMAND, anything else in
- * capitals. Undefined when the address doesn't follow that structure.
+ * Operations grouped by their tags:
+ * 1. a tag found on every operation tells them apart from nothing, so it is ignored (when there are at
+ *    least two operations);
+ * 2. the group is named after the operation's other tags, in their order, joined with a space
+ *    ("default" when none is left).
+ * Groups are sorted alphabetically.
  */
-export function messageType(address: string): { label: string; kind: string } | undefined {
-  const parts = address.split(".");
-  if (parts.length !== 5) return undefined;
-  const type = parts[2];
-  const label = MESSAGE_TYPES[type] ?? type.toUpperCase();
-  return { label, kind: label.toLowerCase().replace(/[^a-z0-9]+/g, "-") };
+export function groupByTag(doc: AsyncApiDoc): OperationGroup[] {
+  const operations = listOperations(doc);
+  const names = operations.map((op) => [...new Set(op.tags.map((t) => t.name))]);
+  const common = new Set(operations.length > 1 ? names.reduce((acc, n) => acc.filter((t) => n.includes(t))) : []);
+  const groups = new Map<string, OperationGroup>();
+  operations.forEach((op, i) => {
+    const tag = names[i].filter((t) => !common.has(t)).join(" ") || UNTAGGED;
+    if (!groups.has(tag)) groups.set(tag, { tag, operations: [] });
+    groups.get(tag)!.operations.push(op);
+  });
+  return [...groups.values()].sort((a, b) => a.tag.localeCompare(b.tag));
 }
-
-const MESSAGE_TYPES: Record<string, string> = { domain_event: "EVENT", command: "COMMAND" };

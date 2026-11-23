@@ -1,5 +1,5 @@
 import { createContext } from "preact";
-import { useCallback, useContext, useEffect, useMemo, useState } from "preact/hooks";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "preact/hooks";
 import {
   effectiveParameters,
   endpointAnchor,
@@ -20,10 +20,9 @@ import { Text } from "./Text.tsx";
 import { mediaExample } from "./example.ts";
 import { formatJson } from "./json.ts";
 import {
-  groupByNamespace,
+  groupByTag as groupOperationsByTag,
   listOperations,
   localName,
-  messageType,
   operationAnchor,
   type AsyncApiDoc,
   type AsyncMessage,
@@ -35,6 +34,8 @@ import { load as loadYaml } from "js-yaml";
 interface Loaded<T> {
   doc: T;
   fileName: string;
+  /** The file as written, shown as the spec's source. */
+  text: string;
 }
 
 type State =
@@ -62,8 +63,6 @@ export interface AppProps {
   onLoad?: (title: string) => void;
 }
 
-/** Hash of the AsyncAPI tab (OpenAPI, the default, has none). */
-const ASYNCAPI_HASH = "asyncapi";
 
 /** Fetches and parses a spec: JSON when it parses as such, YAML otherwise. */
 async function loadSpec<T>(url: string, key: SpecKind): Promise<Loaded<T>> {
@@ -79,7 +78,7 @@ async function loadSpec<T>(url: string, key: SpecKind): Promise<Loaded<T>> {
   if (!doc || typeof doc !== "object" || !doc[key]) throw new Error(`${url}: not an ${key === "openapi" ? "OpenAPI" : "AsyncAPI"} document`);
   // The file name, for the raw-file link: the last segment of the URL.
   const fileName = decodeURIComponent(new URL(url, location.href).pathname.split("/").pop() || url);
-  return { doc: doc as T, fileName };
+  return { doc: doc as T, fileName, text };
 }
 
 /** The app's root node, to find its own elements (they're in a shadow root, out of `document`'s reach). */
@@ -106,13 +105,21 @@ const TAB_SEPARATOR = "@";
 const REQUEST_TAB = "request";
 const MESSAGE_TAB_PREFIX = "message-";
 
-function parseHash(hash: string): { anchor: string; tab?: string } {
+/**
+ * A search is `#?<query>`: everything after the `?`, as typed. It covers both specs, so it belongs to
+ * neither. Endpoint paths never contain a `?`, so it can't be confused with an anchor.
+ */
+const SEARCH_SEPARATOR = "?";
+
+function parseHash(hash: string): { anchor: string; tab?: string; query: string } {
+  const q = hash.indexOf(SEARCH_SEPARATOR);
+  if (q >= 0) return { anchor: hash.slice(0, q), query: hash.slice(q + 1) };
   const at = hash.lastIndexOf(TAB_SEPARATOR);
   if (at > 0) {
     const tab = hash.slice(at + 1);
-    if (tab === REQUEST_TAB || tab.startsWith("response-") || tab.startsWith(MESSAGE_TAB_PREFIX)) return { anchor: hash.slice(0, at), tab };
+    if (tab === REQUEST_TAB || tab.startsWith("response-") || tab.startsWith(MESSAGE_TAB_PREFIX)) return { anchor: hash.slice(0, at), tab, query: "" };
   }
-  return { anchor: hash };
+  return { anchor: hash, query: "" };
 }
 
 /**
@@ -180,7 +187,7 @@ export function App({ openapi: openapiUrl, asyncapi: asyncapiUrl, routing, root,
           ) : state.status === "error" ? (
             <p class="msg error">Failed to load spec: {state.message}</p>
           ) : (
-            <Viewer openapi={state.openapi} asyncapi={state.asyncapi} hash={hash} urls={{ openapi: openapiUrl, asyncapi: asyncapiUrl }} />
+            <Viewer openapi={state.openapi} asyncapi={state.asyncapi} hash={hash} routing={routing} urls={{ openapi: openapiUrl, asyncapi: asyncapiUrl }} />
           )}
         </div>
       </NavigateContext.Provider>
@@ -188,52 +195,84 @@ export function App({ openapi: openapiUrl, asyncapi: asyncapiUrl, routing, root,
   );
 }
 
-function Viewer({ openapi, asyncapi, hash, urls }: {
+function Viewer({ openapi, asyncapi, hash, routing, urls }: {
   openapi?: Loaded<OpenApiDoc>;
   asyncapi?: Loaded<AsyncApiDoc>;
   hash: string;
+  routing: Routing;
   urls: Partial<Record<SpecKind, string>>;
 }) {
 
-  // OpenAPI is the default; `#asyncapi…` selects AsyncAPI. With a single spec, that one is shown.
-  const view: SpecKind = !openapi || (asyncapi && hash.startsWith(ASYNCAPI_HASH)) ? "asyncapi" : "openapi";
-  const doc = view === "openapi" ? openapi?.doc : undefined;
-  const { anchor, tab } = parseHash(hash);
+  // Endpoints and operations live side by side: an anchor names one or the other (operations' anchors
+  // start with `asyncapi/`), whichever spec it comes from.
+  const { anchor, tab, query } = parseHash(hash);
+  const searching = query.trim() !== "";
+  const doc = openapi?.doc;
+  const asyncDoc = asyncapi?.doc;
   const selected = doc && anchor ? listEndpoints(doc).find((ep) => endpointAnchor(ep) === anchor) : undefined;
-  const asyncDoc = view === "asyncapi" ? asyncapi?.doc : undefined;
   const selectedOp = asyncDoc && anchor ? listOperations(asyncDoc).find((op) => operationAnchor(op) === anchor) : undefined;
-  const active = (view === "openapi" ? openapi : asyncapi)!;
-  const split = !!(selected || selectedOp);
+  // `#source/openapi` / `#source/asyncapi`: a spec's file, as written, in the main area.
+  const sourceKind: SpecKind | undefined =
+    openapi && anchor === `${SOURCE_PREFIX}openapi` ? "openapi" : asyncapi && anchor === `${SOURCE_PREFIX}asyncapi` ? "asyncapi" : undefined;
+  const source = sourceKind === "openapi" ? openapi : sourceKind === "asyncapi" ? asyncapi : undefined;
+  const split = !!(selected || selectedOp || source);
+  const navigate = useContext(NavigateContext);
+  const home = "";
+  // The API's title: OpenAPI's when there is one, even if AsyncAPI's differs.
+  const title = (openapi ?? asyncapi)!.doc.info.title;
+  // The page a search was started from, to return to when it is cleared. Kept after opening a result,
+  // so a search reached again with Back still knows where it came from.
+  const searchedFrom = useRef<string | null>(null);
+  // An older `#asyncapi?<query>` link: the same search, at its one address.
+  useEffect(() => {
+    if (searching && anchor !== "") navigate(`${SEARCH_SEPARATOR}${query}`, true);
+  }, [searching, anchor, query]);
+  const search = (q: string) => {
+    if (q.trim()) {
+      if (!searching) searchedFrom.current = hash;
+      // Each keystroke replaces the search in the history, so it is a single entry, right after the
+      // page it was started from.
+      navigate(`${SEARCH_SEPARATOR}${q}`, searching);
+    } else if (!searching) {
+      // Already left (e.g. a second "empty" for the same Escape): going back again would leave the page.
+    } else if (searchedFrom.current === null) {
+      // Opened directly (a link, a reload): nowhere known to return to.
+      navigate(home, true);
+    } else if (routing === "hash") {
+      history.back();
+    } else {
+      navigate(searchedFrom.current);
+    }
+  };
 
   return (
     <div class={split ? "app app-split" : "app"}>
-      {/* One tab per spec, only when there are two: above everything, across the whole window. */}
-      {openapi && asyncapi && (
-        <div class="tabs spec-tabs" role="tablist">
-          <a href="#" role="tab" aria-selected={view === "openapi"} class={`tab${view === "openapi" ? " active" : ""}`}>
-            OpenAPI
-          </a>
-          <a href={`#${ASYNCAPI_HASH}`} role="tab" aria-selected={view === "asyncapi"} class={`tab${view === "asyncapi" ? " active" : ""}`}>
-            AsyncAPI
-          </a>
-        </div>
-      )}
-      <div class={split ? "layout split" : "layout"}>
+      {/* A spec's source takes the whole width: no list beside it. */}
+      <div class={split ? `layout split${source ? " no-list" : ""}` : "layout"}>
         <header>
-          <h1>
-            <a href={view === "openapi" ? "#" : `#${ASYNCAPI_HASH}`} class="home">{active.doc.info.title}</a>{" "}
-            <span class="version">{active.doc.info.version}</span>
-          </h1>
-          {/* The spec version, as a tag next to the title. */}
-          <span class="badge">
-            {view === "openapi" ? `OpenAPI ${openapi!.doc.openapi}` : `AsyncAPI ${asyncapi!.doc.asyncapi}`}
-          </span>
-          <RawLink url={urls[view]!} fileName={active.fileName} />
+          {/* The API's title, which leads to the home page. */}
+          <a class="app-title" href="#">{title}</a>
+          {/* The spec formats loaded, with their versions: each opens its spec's source (again: back home). */}
+          {openapi && <SourceTag kind="openapi" label={`OpenAPI ${openapi.doc.openapi}`} active={sourceKind === "openapi"} />}
+          {asyncapi && <SourceTag kind="asyncapi" label={`AsyncAPI ${asyncapi.doc.asyncapi}`} active={sourceKind === "asyncapi"} />}
+          <SearchBox query={query} onChange={search} placeholder={openapi && asyncapi ? "Search endpoints and operations" : openapi ? "Search endpoints" : "Search operations"} />
         </header>
-        <nav>
-          {doc && <EndpointList doc={doc} selected={selected} />}
-          {asyncDoc && <OperationList doc={asyncDoc} selected={selectedOp} />}
-        </nav>
+        {searching ? (
+          // Search results take the list's place, centered like the home page's list.
+          <nav class="search-results">
+            <h2 class="results-title">Search results</h2>
+            <ApiList openapi={doc} asyncapi={asyncDoc} query={query} />
+          </nav>
+        ) : (
+          !source && (
+            <nav>
+              <ApiList openapi={doc} asyncapi={asyncDoc} selected={selected} selectedOp={selectedOp} />
+            </nav>
+          )
+        )}
+        {source && sourceKind && (
+          <SourcePanel text={source.text} url={urls[sourceKind]!} fileName={source.fileName} />
+        )}
         {doc && selected && <EndpointPanel key={anchor} doc={doc} ep={selected} tab={tab} />}
         {asyncDoc && selectedOp && <OperationPanel key={anchor} doc={asyncDoc} op={selectedOp} tab={tab} />}
       </div>
@@ -241,93 +280,225 @@ function Viewer({ openapi, asyncapi, hash, urls }: {
   );
 }
 
-/** Link to a spec file as is, opened in a new tab. */
+/**
+ * Searches the endpoints / operations: the query goes to the address (`#?<query>`) and the results
+ * replace the list, centered. Every word must appear (ignoring case) in one of an item's texts (path, method,
+ * summary, tag…). Escape, or emptying it, returns to the page the search was started from. Typing anywhere goes to it.
+ */
+function SearchBox({ query, onChange, placeholder }: { query: string; onChange: (q: string) => void; placeholder: string }) {
+  const input = useRef<HTMLInputElement>(null);
+  // Typing anywhere goes to the box: a character key moves the focus there (cursor at the end) and the
+  // character lands in it. Not space (it scrolls the page), shortcuts, or keys typed in another field.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key.length !== 1 || e.key === " " || e.ctrlKey || e.metaKey || e.altKey || e.isComposing || e.defaultPrevented) return;
+      // composedPath() sees through shadow roots, where e.target would only be the host element.
+      const typing = e.composedPath().some(
+        (n) => n instanceof HTMLElement && (n.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(n.tagName)),
+      );
+      if (typing || !input.current) return;
+      const end = input.current.value.length;
+      input.current.focus();
+      input.current.setSelectionRange(end, end);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+  // A magnifying glass instead of placeholder text; the label stays for screen readers.
+  return (
+    <span class="search-box">
+      <svg class="search-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+        <circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6" />
+        <path d="m10.5 10.5 3.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+      </svg>
+      <input
+        ref={input}
+        class="search"
+        type="search"
+        value={query}
+        title={`${placeholder} (just start typing)`}
+        aria-label={placeholder}
+        onInput={(e) => onChange((e.target as HTMLInputElement).value)}
+        onKeyDown={(e) => {
+          if (e.key !== "Escape") return;
+          // The browser would also clear a search box on Escape, emptying it a second time.
+          e.preventDefault();
+          onChange("");
+        }}
+      />
+    </span>
+  );
+}
+
+/** Whether every word of the query appears in one of the texts, ignoring case. An empty query matches everything. */
+function matches(query: string, texts: (string | undefined)[]): boolean {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const haystack = texts.filter(Boolean).join("\n").toLowerCase();
+  return words.every((w) => haystack.includes(w));
+}
+
+/** Anchor prefix of a spec's source page: `#source/openapi`, `#source/asyncapi`. */
+const SOURCE_PREFIX = "source/";
+
+/** A spec format tag in the title bar ("OpenAPI 3.1.0"): opens the spec's source, or closes it when open. */
+function SourceTag({ kind, label, active }: { kind: SpecKind; label: string; active: boolean }) {
+  return (
+    <a class={`badge source-tag${active ? " active" : ""}`} href={active ? "#" : `#${SOURCE_PREFIX}${kind}`} aria-current={active ? "page" : undefined}>
+      {label}
+    </a>
+  );
+}
+
+/** A spec's file as written, in the main area, with a download button floating over it (no title: the tag says which). */
+function SourcePanel({ text, url, fileName }: { text: string; url: string; fileName: string }) {
+  return (
+    <article class="panel">
+      {/* Sticks to the top right of the area while the file scrolls under it. */}
+      <div class="source-download-anchor">
+        <a class="source-download" href={url} download={fileName} title={`Download ${fileName}`} aria-label={`Download ${fileName}`}>
+          <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true">
+            <path d="M8 2v8.5M4.5 7 8 10.5 11.5 7M3 13.5h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </a>
+      </div>
+      <pre class="raw-schema source"><code>{text}</code></pre>
+    </article>
+  );
+}
+
+/** Link to a spec file as is, by its name, opened in a new tab (not shown for now). */
 function RawLink({ url, fileName }: { url: string; fileName: string }) {
   return (
-    <a class="download" href={url} target="_blank" rel="noopener" title="Open the raw file in a new tab">
+    <a class="file-link" href={url} target="_blank" rel="noopener" title="Open the file in a new tab">
       {fileName}
     </a>
   );
 }
 
-/** The message type from the channel address (EVENT, COMMAND…), or the action when the address has no such part. */
+/** The operation's action, as in the AsyncAPI standard: SEND or RECEIVE. */
 function OperationBadge({ op }: { op: AsyncOperation }) {
-  const type = messageType(op.address);
-  return type ? (
-    <span class={`method mt-${type.kind}`}>{type.label}</span>
-  ) : (
-    <span class={`method m-${op.action}`}>{op.action.toUpperCase()}</span>
-  );
+  return <span class={`method m-${op.action}`}>{op.action.toUpperCase()}</span>;
 }
 
-/** Keeps the selected row of the list visible, e.g. when opening a deep link or using back/forward. */
+/**
+ * Keeps the selected row of the list visible, e.g. when opening an endpoint from the home page, a deep
+ * link or back/forward. A row out of view is scrolled up to the top of the list, together with its
+ * group's heading when both fit; a row already in view (just clicked) stays where it is.
+ */
 function useScrollSelectedIntoView(selected: unknown) {
   const root = useContext(RootContext);
   useEffect(() => {
-    root.querySelector("nav li.selected")?.scrollIntoView({ block: "nearest" });
+    const row = root.querySelector<HTMLElement>("nav li.selected");
+    const list = row?.closest("nav");
+    if (!row || !list) return;
+    const r = row.getBoundingClientRect();
+    const l = list.getBoundingClientRect();
+    if (r.top >= l.top && r.bottom <= l.bottom) return;
+    // The group's heading on top, unless the group is so long that the row would then be out of view.
+    const section = row.closest("section")?.getBoundingClientRect();
+    const top = section && r.bottom - section.top <= l.height - 8 ? section.top : r.top;
+    list.scrollTop += top - l.top - 8;
   }, [selected]);
 }
 
-/** AsyncAPI operations, grouped by the namespace of their channel (the address up to its last dot). */
-function OperationList({ doc, selected }: { doc: AsyncApiDoc; selected?: AsyncOperation }) {
-  useScrollSelectedIntoView(selected);
-  const groups = groupByNamespace(doc);
-  if (groups.length === 0) return <p class="empty">No operations.</p>;
+/** An endpoint's row in a list: method and path (the summary shows on the endpoint's page). */
+function EndpointRow({ ep, selected }: { ep: Endpoint; selected?: Endpoint }) {
+  const anchor = endpointAnchor(ep);
+  const isSelected = selected !== undefined && anchor === endpointAnchor(selected);
+  const cls = [isSelected && "selected", ep.op.deprecated && "deprecated"].filter(Boolean).join(" ");
   return (
-    <>
-      {groups.map((g) => (
-        <section key={g.namespace} class="events">
-          {/* Only the last segment of the namespace ("offer"); the full one is in the tooltip. */}
-          <h2 class="namespace" title={g.namespace || undefined}>{g.namespace ? localName(g.namespace) : "No namespace"}</h2>
-          <ul class="endpoints">
-            {g.operations.map((op) => {
-              const isSelected = selected?.id === op.id;
-              const cls = [isSelected && "selected", op.deprecated && "deprecated"].filter(Boolean).join(" ");
-              return (
-                <li key={op.id} class={cls}>
-                  {/* The namespace is the heading, so each row shows only the rest of the address. */}
-                  <a href={`#${operationAnchor(op)}`} title={op.address} aria-current={isSelected ? "true" : undefined}>
-                    <OperationBadge op={op} />
-                    <code class="path">{localName(op.address)}</code>
-                    {op.summary && <span class="summary">{op.summary}</span>}
-                  </a>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      ))}
-    </>
+    <li class={cls}>
+      <a href={`#${anchor}`} aria-current={isSelected ? "true" : undefined}>
+        <span class={`method m-${ep.method}`}>{ep.method.toUpperCase()}</span>
+        <code class="path">{ep.path}</code>
+      </a>
+    </li>
   );
 }
 
-function EndpointList({ doc, selected }: { doc: OpenApiDoc; selected?: Endpoint }) {
-  useScrollSelectedIntoView(selected);
+/** An envelope, marking messages and message-based operations. */
+function EnvelopeIcon() {
+  return (
+    <svg class="op-icon" viewBox="0 0 18 13" width="15" height="11" aria-hidden="true">
+      <rect class="op-icon-paper" x="0.75" y="0.75" width="16.5" height="11.5" rx="1.5" stroke="currentColor" stroke-width="1.5" />
+      <path d="M1.5 1.5 9 7.5l7.5-6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
+    </svg>
+  );
+}
 
+/** An operation's row in a list: action, the last segment of its address, and summary. */
+function OperationRow({ op, selected }: { op: AsyncOperation; selected?: AsyncOperation }) {
+  const isSelected = selected?.id === op.id;
+  const cls = [isSelected && "selected", op.deprecated && "deprecated"].filter(Boolean).join(" ");
+  return (
+    <li class={cls}>
+      {/* Only the last segment of the address ("offer_created"); the full one is in the tooltip. */}
+      <a href={`#${operationAnchor(op)}`} title={op.address} aria-current={isSelected ? "true" : undefined}>
+        <OperationBadge op={op} />
+        {/* An envelope marks a message-based operation, apart from the endpoints' paths. It stands on its
+            own, beside the name, so a long name wraps under itself. */}
+        <span class="op-name">
+          <EnvelopeIcon />
+          <code class="path">{localName(op.address)}</code>
+        </span>
+        {op.summary && <span class="summary">{op.summary}</span>}
+      </a>
+    </li>
+  );
+}
+
+/**
+ * Endpoints and operations together, in sections named after their tags: a name found in both specs is
+ * one section (its endpoints, then its operations), and sections are sorted alphabetically. Used for the
+ * home page, the left column and, with a `query`, the search results.
+ */
+function ApiList({ openapi, asyncapi, selected, selectedOp, query = "" }: {
+  openapi?: OpenApiDoc;
+  asyncapi?: AsyncApiDoc;
+  selected?: Endpoint;
+  selectedOp?: AsyncOperation;
+  query?: string;
+}) {
+  useScrollSelectedIntoView(selected ?? selectedOp);
+  const sections = new Map<string, { description?: string; endpoints: Endpoint[]; operations: AsyncOperation[] }>();
+  const section = (tag: string) => {
+    if (!sections.has(tag)) sections.set(tag, { endpoints: [], operations: [] });
+    return sections.get(tag)!;
+  };
+  for (const g of openapi ? groupByTag(openapi) : []) {
+    for (const ep of g.endpoints) {
+      if (!matches(query, [g.tag, ep.method, ep.path, ep.op.summary, ep.op.operationId])) continue;
+      const sec = section(g.tag);
+      sec.description ??= g.description;
+      sec.endpoints.push(ep);
+    }
+  }
+  for (const g of asyncapi ? groupOperationsByTag(asyncapi) : []) {
+    for (const op of g.operations) {
+      if (matches(query, [g.tag, op.address, op.action, op.summary, op.id, ...op.messages.map((m) => m.label)])) {
+        section(g.tag).operations.push(op);
+      }
+    }
+  }
+  if (sections.size === 0) return <p class="empty">{query.trim() ? `Nothing matches “${query.trim()}”.` : "No endpoints or operations."}</p>;
   return (
     <>
-      {groupByTag(doc).map((g) => (
-        <section key={g.tag}>
-          <h2>{g.tag}</h2>
-          {g.description && <p class="desc"><Text>{g.description}</Text></p>}
-          <ul class="endpoints">
-            {g.endpoints.map((ep) => {
-              const anchor = endpointAnchor(ep);
-              const isSelected = selected !== undefined && anchor === endpointAnchor(selected);
-              const cls = [isSelected && "selected", ep.op.deprecated && "deprecated"].filter(Boolean).join(" ");
-              return (
-                <li key={anchor} class={cls}>
-                  <a href={`#${anchor}`} aria-current={isSelected ? "true" : undefined}>
-                    <span class={`method m-${ep.method}`}>{ep.method.toUpperCase()}</span>
-                    <code class="path">{ep.path}</code>
-                    {ep.op.summary && <span class="summary">{ep.op.summary}</span>}
-                  </a>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      ))}
+      {[...sections.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([tag, { description, endpoints, operations }]) => (
+          <section key={tag}>
+            <h2>{tag}</h2>
+            {description && <p class="desc"><Text>{description}</Text></p>}
+            <ul class="endpoints">
+              {endpoints.map((ep) => (
+                <EndpointRow key={endpointAnchor(ep)} ep={ep} selected={selected} />
+              ))}
+              {operations.map((op) => (
+                <OperationRow key={op.id} op={op} selected={selectedOp} />
+              ))}
+            </ul>
+          </section>
+        ))}
     </>
   );
 }
@@ -386,6 +557,7 @@ function BodySection({
   description,
   optional,
   exclude,
+  envelope,
 }: {
   doc: unknown;
   content: Record<string, { schema?: unknown; example?: unknown }>;
@@ -393,6 +565,8 @@ function BodySection({
   description?: string;
   optional?: boolean;
   exclude?: ReadonlySet<string>;
+  /** A message payload: a `payload` / `body` property marks an envelope. */
+  envelope?: boolean;
 }) {
   const [view, setView] = useState<BodyView>("fields");
   const entries = Object.entries(content);
@@ -423,7 +597,7 @@ function BodySection({
           ) : view === "example" ? (
             <BodyExample doc={doc} media={media} exclude={exclude} />
           ) : (
-            <SchemaView doc={doc} schema={media.schema} exclude={exclude} />
+            <SchemaView doc={doc} schema={media.schema} exclude={exclude} envelope={envelope} />
           )}
         </div>
       ))}
@@ -546,11 +720,11 @@ function MessageContent({ doc, op, message }: { doc: AsyncApiDoc; op: AsyncOpera
       {message.payload !== undefined ? (
         <BodySection
           doc={doc}
-          title="Payload"
           content={{ [message.contentType]: { schema: message.payload, example: message.example?.payload } }}
+          envelope
         />
       ) : (
-        <p class="empty">No payload.</p>
+        <p class="empty">No body.</p>
       )}
     </DirectionContext.Provider>
   );
@@ -581,7 +755,12 @@ function OperationPanel({ doc, op, tab }: { doc: AsyncApiDoc; op: AsyncOperation
           className="endpoint-tabs"
           selected={selectedTab}
           onSelect={selectTab}
-          labels={op.messages.map((m) => m.label)}
+          labels={op.messages.map((m) => (
+            <span class="message-tab">
+              <EnvelopeIcon />
+              {m.label}
+            </span>
+          ))}
           render={(i) => <MessageContent doc={doc} op={op} message={op.messages[i]} />}
         />
       )}
