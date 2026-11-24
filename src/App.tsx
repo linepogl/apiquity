@@ -189,7 +189,7 @@ export function App({ openapi: openapiUrl, asyncapi: asyncapiUrl, routing, title
         <div class="host" title="" onClick={onClick}>
           {state.status === "loading" ? (
             <div class="loading" role="status" aria-label="Loading">
-              <span class="loading-name">apiquity</span>
+              <span class="loading-name">{title || "apiquity"}</span>
               <span class="loading-dot" />
             </div>
           ) : state.status === "error" ? (
