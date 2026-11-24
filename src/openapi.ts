@@ -82,18 +82,24 @@ export function compareEndpoints(a: Endpoint, b: Endpoint): number {
   return a.path.localeCompare(b.path) || HTTP_METHODS.indexOf(a.method) - HTTP_METHODS.indexOf(b.method);
 }
 
-/** Group endpoints by their first tag; groups sorted alphabetically. The document's `tags` give their descriptions. */
+/**
+ * Group endpoints by their first tag; groups sorted alphabetically. The document's `tags` give their descriptions.
+ * Untagged endpoints are in a group named "", first.
+ */
 export function groupByTag(doc: OpenApiDoc): EndpointGroup[] {
   const groups = new Map<string, EndpointGroup>();
   for (const t of doc.tags ?? []) groups.set(t.name, { tag: t.name, description: t.description, endpoints: [] });
   for (const ep of listEndpoints(doc)) {
-    const tag = ep.op.tags?.[0] ?? "default";
+    const tag = ep.op.tags?.[0] ?? UNTAGGED;
     if (!groups.has(tag)) groups.set(tag, { tag, endpoints: [] });
     groups.get(tag)!.endpoints.push(ep);
   }
   for (const g of groups.values()) g.endpoints.sort(compareEndpoints);
   return [...groups.values()].filter((g) => g.endpoints.length > 0).sort((a, b) => a.tag.localeCompare(b.tag));
 }
+
+/** Name of the group of untagged endpoints: none, so that it is shown without a heading, first. */
+export const UNTAGGED = "";
 
 /** URL anchor for an endpoint, e.g. "get/api/vehicles/{id}". Method + path is unique within a document. */
 export function endpointAnchor(ep: Endpoint): string {

@@ -23,6 +23,7 @@
     "start": "node server/server.ts spec/openapi.json spec/asyncapi.yaml",
     "start-openapi": "node server/server.ts spec/openapi.json",
     "start-asyncapi": "node server/server.ts spec/asyncapi.yaml",
+    "start-live": "node server/server.ts http://127.0.0.1:8000/api/docs/openapi.json http://127.0.0.1:8000/api/docs/asyncapi.yaml",
     "typecheck": "tsc --noEmit",
     "release": "npm run typecheck && npm run build && npm publish && git push --follow-tags"
   },

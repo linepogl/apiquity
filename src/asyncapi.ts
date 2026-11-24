@@ -139,15 +139,15 @@ export interface OperationGroup {
   operations: AsyncOperation[];
 }
 
-/** Group of the operations left without any tag. */
-const UNTAGGED = "default";
+/** Group of the operations left without any tag: no name, shown without a heading, first. */
+const UNTAGGED = "";
 
 /**
  * Operations grouped by their tags:
  * 1. a tag found on every operation tells them apart from nothing, so it is ignored (when there are at
  *    least two operations);
  * 2. the group is named after the operation's other tags, in their order, joined with a space
- *    ("default" when none is left).
+ *    ("" when none is left: the untagged group, sorted first).
  * Groups are sorted alphabetically.
  */
 export function groupByTag(doc: AsyncApiDoc): OperationGroup[] {

@@ -31,6 +31,8 @@ header {
 h2 { margin: 28px 0 8px; font-size: 1.15rem; }
 .desc { color: var(--muted); margin: 0 0 8px; }
 .endpoints { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+/* The untagged section has no heading: its list keeps the heading's space above it. */
+section > .endpoints:first-child { margin-top: 28px; }
 .endpoints li { background: var(--row); border-top: 1px solid var(--border); }
 .endpoints a { display: flex; align-items: center; gap: 12px; padding: 8px 12px; }
 .endpoints a:hover { background: var(--hover); }
@@ -52,6 +54,12 @@ h2 { margin: 28px 0 8px; font-size: 1.15rem; }
 .message-tab .op-icon { width: 17px; height: 13px; position: relative; top: 1px; }
 .summary { margin-left: auto; color: var(--muted); font-size: .85rem; text-align: right; }
 .deprecated .path { text-decoration: line-through; color: var(--muted); }
+/* While loading: the name, and a beating circle under it, in the middle of the component. */
+.loading { height: var(--apiquity-ui-height, 100vh); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px; }
+.loading-name { font-size: 22px; font-weight: 600; letter-spacing: 0.04em; color: var(--muted); }
+.loading-dot { width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--muted); box-sizing: border-box; animation: beat 1.1s ease-in-out infinite; }
+@keyframes beat { 0%, 100% { transform: scale(0.7); opacity: 0.6; } 15% { transform: scale(1.15); opacity: 1; } 30% { transform: scale(0.85); } 45% { transform: scale(1.05); } }
+@media (prefers-reduced-motion: reduce) { .loading-dot { animation-duration: 3s; } }
 .msg { padding: 24px; } .error { color: var(--delete); }
 @media (max-width: 600px) { .endpoints a { flex-wrap: wrap; } .summary { margin-left: 0; width: 100%; text-align: left; } }
 
@@ -77,6 +85,7 @@ h2 { margin: 28px 0 8px; font-size: 1.15rem; }
 .file-link:hover { text-decoration: underline; }
 .split nav { overflow-y: auto; border-right: 1px solid var(--border); padding: 0 12px 24px; }
 .split nav h2 { margin-top: 16px; font-size: .95rem; }
+.split nav section > .endpoints:first-child { margin-top: 16px; }
 .split nav .endpoints a { gap: 8px; padding: 6px 8px; }
 .split nav .endpoints .method { width: 52px; font-size: .7rem; }
 .split nav .endpoints .path { font-size: .8rem; }
@@ -211,3 +220,35 @@ h2 { margin: 28px 0 8px; font-size: 1.15rem; }
 /* AsyncAPI operations in the list */
 .m-send { background: #3bafda; } .m-receive { background: #e9573f; }
 .chip.chip-required { color: var(--delete); border-color: var(--delete); }
+
+/* Try tab: call the endpoint. Its tab stands apart, at the right end of the tab bar. */
+.tab.try-tab { margin-left: auto; }
+.try-fields { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 12px; align-items: center; }
+.try-field { display: contents; }
+.try-label { display: flex; align-items: center; gap: 6px; font-size: .85rem; }
+.try-input {
+  font: .85rem ui-monospace, monospace; color: var(--fg); background: var(--row);
+  border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; min-width: 0; max-width: 100%;
+}
+.try-input:focus { outline: 2px solid var(--sel); border-color: var(--get); }
+select.try-input { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; width: 100%; }
+.try-media { width: auto !important; font-weight: 400; }
+.try-server { width: auto !important; max-width: 220px; padding: 5px 8px; font-size: .8rem; }
+.try-body { display: block; width: 100%; box-sizing: border-box; line-height: 1.45; resize: vertical; }
+.try-send { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 20px; }
+.try-url { display: flex; align-items: center; gap: 10px; flex: 1 1 300px; min-width: 0; font: .85rem ui-monospace, monospace; word-break: break-all; }
+.try-button {
+  font: 600 .9rem system-ui, -apple-system, "Segoe UI", sans-serif; color: #fff; background: var(--get);
+  border: 0; border-radius: 6px; padding: 7px 20px; cursor: pointer;
+}
+.try-button:hover:not(:disabled) { filter: brightness(1.1); }
+.try-button:disabled { opacity: .5; cursor: default; }
+.try-missing { font-size: .8rem; color: var(--delete); }
+.try-status { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.try-code { font: 700 .9rem ui-monospace, monospace; }
+.try-code.s2 { color: var(--post); } .try-code.s3 { color: var(--get); } .try-code.s4 { color: var(--put); } .try-code.s5 { color: var(--delete); }
+.try-meta { font-size: .8rem; color: var(--muted); }
+.try-error { color: var(--delete); font-size: .9rem; }
+
+/* Authorization */
+.try-note { font-size: .85rem; color: var(--muted); }

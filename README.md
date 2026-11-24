@@ -67,7 +67,7 @@ document.querySelector("apiquity-ui").addEventListener("load", (e) => (document.
 | -------------------------------------- | ----------------------------------------------------- |
 | `#`                                    | Home: the list of endpoints and operations.           |
 | `#get/api/orders/{id}`                 | An endpoint, by method and path.                      |
-| `#get/api/orders/{id}@response-200`    | …with a tab selected (`@request`, `@response-<code>`).|
+| `#get/api/orders/{id}@response-200`    | …with a tab selected (`@request`, `@response-<code>`, `@response` for `default`, `@try`).|
 | `#asyncapi/<operation id>`             | An AsyncAPI operation.                                |
 | `#asyncapi/<operation id>@message-<key>` | …with one of its messages selected.                 |
 | `#?<query>`                            | Search results.                                       |
@@ -83,15 +83,17 @@ npm run build        # dist/apiquity.js (npm run dev: rebuild on change)
 npm run typecheck
 ```
 
-To try it on your own documents, run the dev server with one or two files (at most one OpenAPI and one AsyncAPI,
-JSON or YAML; each file's kind is read from its content):
+To try it on your own documents, run the dev server with one or two files or URLs (at most one OpenAPI and one
+AsyncAPI, JSON or YAML; each one's kind is read from its content). URLs are fetched by the dev server, so they need no
+CORS:
 
 ```sh
 node server/server.ts path/to/openapi.json path/to/asyncapi.yaml [--port 8080]
 ```
 
-and open <http://localhost:8080>. The files are read again on each request, so edits show up on reload. `npm start`
-does the same with `spec/openapi.json` and `spec/asyncapi.yaml` (the `spec/` folder is not versioned).
+and open <http://localhost:8080>. The specs are read again on each request, so edits show up on reload. `npm start`
+does the same with `spec/openapi.json` and `spec/asyncapi.yaml` (the `spec/` folder is not versioned). `npm run start-live`
+loads them from an API running locally, at `http://127.0.0.1:8000/api/docs/openapi.json` and `…/asyncapi.yaml`.
 
 ## Releasing
 

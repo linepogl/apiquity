@@ -17,6 +17,7 @@ import {
 import { childrenOf, inlineRefs, isEmptyBody, toNode } from "./schema.ts";
 import { DirectionContext, SchemaRow, SchemaRows, SchemaView, Tabs } from "./SchemaView.tsx";
 import { Text } from "./Text.tsx";
+import { TryPanel } from "./TryPanel.tsx";
 import { mediaExample } from "./example.ts";
 import { formatJson } from "./json.ts";
 import {
@@ -103,6 +104,7 @@ function readHash(): string {
  */
 const TAB_SEPARATOR = "@";
 const REQUEST_TAB = "request";
+const TRY_TAB = "try";
 const MESSAGE_TAB_PREFIX = "message-";
 
 /**
@@ -117,7 +119,7 @@ function parseHash(hash: string): { anchor: string; tab?: string; query: string 
   const at = hash.lastIndexOf(TAB_SEPARATOR);
   if (at > 0) {
     const tab = hash.slice(at + 1);
-    if (tab === REQUEST_TAB || tab.startsWith("response-") || tab.startsWith(MESSAGE_TAB_PREFIX)) return { anchor: hash.slice(0, at), tab, query: "" };
+    if (tab === REQUEST_TAB || tab === TRY_TAB || tab === "response" || tab.startsWith("response-") || tab.startsWith(MESSAGE_TAB_PREFIX)) return { anchor: hash.slice(0, at), tab, query: "" };
   }
   return { anchor: hash, query: "" };
 }
@@ -183,7 +185,10 @@ export function App({ openapi: openapiUrl, asyncapi: asyncapiUrl, routing, root,
       <NavigateContext.Provider value={navigate}>
         <div class="host" onClick={onClick}>
           {state.status === "loading" ? (
-            <p class="msg">Loading…</p>
+            <div class="loading" role="status" aria-label="Loading">
+              <span class="loading-name">apiquity</span>
+              <span class="loading-dot" />
+            </div>
           ) : state.status === "error" ? (
             <p class="msg error">Failed to load spec: {state.message}</p>
           ) : (
@@ -266,14 +271,14 @@ function Viewer({ openapi, asyncapi, hash, routing, urls }: {
         ) : (
           !source && (
             <nav>
-              <ApiList openapi={doc} asyncapi={asyncDoc} selected={selected} selectedOp={selectedOp} />
+              <ApiList openapi={doc} asyncapi={asyncDoc} selected={selected} selectedOp={selectedOp} tab={tab} />
             </nav>
           )
         )}
         {source && sourceKind && (
           <SourcePanel text={source.text} url={urls[sourceKind]!} fileName={source.fileName} />
         )}
-        {doc && selected && <EndpointPanel key={anchor} doc={doc} ep={selected} tab={tab} />}
+        {doc && selected && <EndpointPanel key={anchor} doc={doc} ep={selected} tab={tab} specUrl={urls.openapi!} />}
         {asyncDoc && selectedOp && <OperationPanel key={anchor} doc={asyncDoc} op={selectedOp} tab={tab} />}
       </div>
     </div>
@@ -401,14 +406,28 @@ function useScrollSelectedIntoView(selected: unknown) {
   }, [selected]);
 }
 
+/** An endpoint's tabs: Request, one per response, then Try (call the endpoint). */
+const endpointTabIds = (doc: OpenApiDoc, ep: Endpoint) => [
+  REQUEST_TAB,
+  ...responses(doc, ep).map((r) => (r.status === "default" ? "response" : `response-${r.status}`)),
+  TRY_TAB,
+];
+
+/** An operation's tabs: one per message. */
+const operationTabIds = (op: AsyncOperation) => op.messages.map((m) => MESSAGE_TAB_PREFIX + m.key);
+
+/** A link to a page, on the tab that is open now if that page has it too (the first tab needs no suffix). */
+const linkTo = (anchor: string, tabIds: string[], tab?: string) =>
+  `#${anchor}${tab && tab !== tabIds[0] && tabIds.includes(tab) ? TAB_SEPARATOR + tab : ""}`;
+
 /** An endpoint's row in a list: method and path (the summary shows on the endpoint's page). */
-function EndpointRow({ ep, selected }: { ep: Endpoint; selected?: Endpoint }) {
+function EndpointRow({ doc, ep, selected, tab }: { doc: OpenApiDoc; ep: Endpoint; selected?: Endpoint; tab?: string }) {
   const anchor = endpointAnchor(ep);
   const isSelected = selected !== undefined && anchor === endpointAnchor(selected);
   const cls = [isSelected && "selected", ep.op.deprecated && "deprecated"].filter(Boolean).join(" ");
   return (
     <li class={cls}>
-      <a href={`#${anchor}`} aria-current={isSelected ? "true" : undefined}>
+      <a href={linkTo(anchor, endpointTabIds(doc, ep), tab)} aria-current={isSelected ? "true" : undefined}>
         <span class={`method m-${ep.method}`}>{ep.method.toUpperCase()}</span>
         <code class="path">{ep.path}</code>
       </a>
@@ -427,13 +446,13 @@ function EnvelopeIcon() {
 }
 
 /** An operation's row in a list: action, the last segment of its address, and summary. */
-function OperationRow({ op, selected }: { op: AsyncOperation; selected?: AsyncOperation }) {
+function OperationRow({ op, selected, tab }: { op: AsyncOperation; selected?: AsyncOperation; tab?: string }) {
   const isSelected = selected?.id === op.id;
   const cls = [isSelected && "selected", op.deprecated && "deprecated"].filter(Boolean).join(" ");
   return (
     <li class={cls}>
       {/* Only the last segment of the address ("offer_created"); the full one is in the tooltip. */}
-      <a href={`#${operationAnchor(op)}`} title={op.address} aria-current={isSelected ? "true" : undefined}>
+      <a href={linkTo(operationAnchor(op), operationTabIds(op), tab)} title={op.address} aria-current={isSelected ? "true" : undefined}>
         <OperationBadge op={op} />
         {/* An envelope marks a message-based operation, apart from the endpoints' paths. It stands on its
             own, beside the name, so a long name wraps under itself. */}
@@ -452,11 +471,13 @@ function OperationRow({ op, selected }: { op: AsyncOperation; selected?: AsyncOp
  * one section (its endpoints, then its operations), and sections are sorted alphabetically. Used for the
  * home page, the left column and, with a `query`, the search results.
  */
-function ApiList({ openapi, asyncapi, selected, selectedOp, query = "" }: {
+function ApiList({ openapi, asyncapi, selected, selectedOp, tab, query = "" }: {
   openapi?: OpenApiDoc;
   asyncapi?: AsyncApiDoc;
   selected?: Endpoint;
   selectedOp?: AsyncOperation;
+  /** The tab open now: the rows link to the same tab of their page, when it has one. */
+  tab?: string;
   query?: string;
 }) {
   useScrollSelectedIntoView(selected ?? selectedOp);
@@ -487,14 +508,15 @@ function ApiList({ openapi, asyncapi, selected, selectedOp, query = "" }: {
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([tag, { description, endpoints, operations }]) => (
           <section key={tag}>
-            <h2>{tag}</h2>
+            {/* Untagged endpoints and operations: a section without a heading. */}
+            {tag && <h2>{tag}</h2>}
             {description && <p class="desc"><Text>{description}</Text></p>}
             <ul class="endpoints">
               {endpoints.map((ep) => (
-                <EndpointRow key={endpointAnchor(ep)} ep={ep} selected={selected} />
+                <EndpointRow key={endpointAnchor(ep)} doc={openapi!} ep={ep} selected={selected} tab={tab} />
               ))}
               {operations.map((op) => (
-                <OperationRow key={op.id} op={op} selected={selectedOp} />
+                <OperationRow key={op.id} op={op} selected={selectedOp} tab={tab} />
               ))}
             </ul>
           </section>
@@ -667,9 +689,10 @@ function ResponsePanel({ doc, response }: { doc: OpenApiDoc; response: ApiRespon
   );
 }
 
-function EndpointPanel({ doc, ep, tab }: { doc: OpenApiDoc; ep: Endpoint; tab?: string }) {
+function EndpointPanel({ doc, ep, tab, specUrl }: { doc: OpenApiDoc; ep: Endpoint; tab?: string; specUrl: string }) {
   const list = responses(doc, ep);
-  const tabIds = [REQUEST_TAB, ...list.map((r) => `response-${r.status}`)];
+  const tabIds = endpointTabIds(doc, ep);
+  const tryIndex = tabIds.length - 1;
   // Unknown or missing tab in the URL -> Request.
   const selectedTab = Math.max(0, tabIds.indexOf(tab ?? REQUEST_TAB));
   // Tab switches stay out of the back/forward history.
@@ -686,14 +709,22 @@ function EndpointPanel({ doc, ep, tab }: { doc: OpenApiDoc; ep: Endpoint; tab?: 
       {ep.op.summary && <p class="panel-summary">{ep.op.summary}</p>}
       {ep.op.description && <div class="description"><Text>{ep.op.description}</Text></div>}
 
-      {/* Request | Response 200 | Response 404 … */}
+      {/* Request | Response 200 | Response 404 … | Try */}
       <Tabs
         className="endpoint-tabs"
         selected={selectedTab}
         onSelect={selectTab}
-        labels={["Request", ...list.map((r) => `Response ${r.status}`)]}
-        tabClass={(i) => (i === 0 ? "" : statusClass(list[i - 1].status))}
-        render={(i) => (i === 0 ? <RequestPanel doc={doc} ep={ep} /> : <ResponsePanel doc={doc} response={list[i - 1].response} />)}
+        labels={["Request", ...list.map((r) => (r.status === "default" ? "Response" : `Response ${r.status}`)), "Try"]}
+        tabClass={(i) => (i === 0 ? "" : i === tryIndex ? "try-tab" : statusClass(list[i - 1].status))}
+        render={(i) =>
+          i === 0 ? (
+            <RequestPanel doc={doc} ep={ep} />
+          ) : i === tryIndex ? (
+            <TryPanel doc={doc} ep={ep} specUrl={specUrl} />
+          ) : (
+            <ResponsePanel doc={doc} response={list[i - 1].response} />
+          )
+        }
       />
     </article>
   );
@@ -732,7 +763,7 @@ function MessageContent({ doc, op, message }: { doc: AsyncApiDoc; op: AsyncOpera
 
 /** An AsyncAPI operation, laid out like an endpoint: title, description, then one tab per message. */
 function OperationPanel({ doc, op, tab }: { doc: AsyncApiDoc; op: AsyncOperation; tab?: string }) {
-  const tabIds = op.messages.map((m) => MESSAGE_TAB_PREFIX + m.key);
+  const tabIds = operationTabIds(op);
   // Unknown or missing tab in the URL -> the first message.
   const selectedTab = Math.max(0, tab ? tabIds.indexOf(tab) : 0);
   const navigate = useContext(NavigateContext);
