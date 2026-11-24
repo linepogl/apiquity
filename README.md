@@ -22,6 +22,7 @@ Pin a version in production, e.g. `https://unpkg.com/@linepogl/apiquity@0.2.0/di
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `openapi`  | URL of an OpenAPI 3.x document, JSON or YAML.                                                                                                     |
 | `asyncapi` | URL of an AsyncAPI document (3.x, or 2.x), JSON or YAML.                                                                                          |
+| `title`    | Title shown in the title bar. Default: the OpenAPI document's title, else the AsyncAPI document's.                                                |
 | `routing`  | `hash`: what is shown is kept in the page's URL hash, for deep links and back/forward. Otherwise (the default) it stays inside the component. |
 
 At least one of `openapi` and `asyncapi` is required.
@@ -38,7 +39,7 @@ Light and dark themes follow the user's `prefers-color-scheme`.
 
 | Event  | Description                                                                            |
 | ------ | -------------------------------------------------------------------------------------- |
-| `load` | Once the documents are loaded. `event.detail.title` is the API's title.                |
+| `load` | Once the documents are loaded. `event.detail.title` is the title shown.                |
 
 ```js
 document.querySelector("apiquity-ui").addEventListener("load", (e) => (document.title = e.detail.title));

@@ -7,15 +7,16 @@
 //   openapi, asyncapi  URLs of the documents (JSON or YAML); at least one.
 //   routing            "hash": the selection is kept in the page's URL hash (deep links, back/forward).
 //                      Otherwise (the default) it stays inside the component, leaving the page's hash alone.
+//   title              the title shown in the title bar; default: the OpenAPI document's, else the AsyncAPI one's.
 // Styles:
 //   --apiquity-ui-height  height of the split view (list + selected endpoint); default 100vh.
 // Events:
-//   load               once the documents are loaded; `detail.title` is the first document's title.
+//   load               once the documents are loaded; `detail.title` is the title shown.
 import { render } from "preact";
 import { App, type Routing } from "./App.tsx";
 import css from "./style.css?inline";
 
-const ATTRIBUTES = ["openapi", "asyncapi", "routing"] as const;
+const ATTRIBUTES = ["openapi", "asyncapi", "routing", "title"] as const;
 
 export class ApiquityUi extends HTMLElement {
   static observedAttributes = ATTRIBUTES;
@@ -55,6 +56,7 @@ export class ApiquityUi extends HTMLElement {
         openapi={this.getAttribute("openapi") ?? undefined}
         asyncapi={this.getAttribute("asyncapi") ?? undefined}
         routing={routing}
+        title={this.getAttribute("title") ?? undefined}
         root={this.#root}
         onLoad={(title) => this.dispatchEvent(new CustomEvent("load", { detail: { title } }))}
       />,

@@ -58,9 +58,11 @@ export interface AppProps {
   /** URL of the AsyncAPI document, JSON or YAML. */
   asyncapi?: string;
   routing: Routing;
+  /** The title shown in the title bar, instead of the documents' own. */
+  title?: string;
   /** The root the app is rendered in (a shadow root), to look up its own elements. */
   root: ParentNode;
-  /** Called once the documents are loaded, with the title of the first one. */
+  /** Called once the documents are loaded, with the title shown. */
   onLoad?: (title: string) => void;
 }
 
@@ -148,7 +150,7 @@ function useRoute(routing: Routing): [string, Navigate] {
   return [route, navigate];
 }
 
-export function App({ openapi: openapiUrl, asyncapi: asyncapiUrl, routing, root, onLoad }: AppProps) {
+export function App({ openapi: openapiUrl, asyncapi: asyncapiUrl, routing, title, root, onLoad }: AppProps) {
   const [state, setState] = useState<State>({ status: "loading" });
   const [hash, navigate] = useRoute(routing);
 
@@ -163,7 +165,7 @@ export function App({ openapi: openapiUrl, asyncapi: asyncapiUrl, routing, root,
         if (!current) return;
         if (!openapi && !asyncapi) throw new Error('no document: set the "openapi" or "asyncapi" attribute');
         setState({ status: "ready", openapi, asyncapi });
-        onLoad?.((openapi ?? asyncapi)!.doc.info.title);
+        onLoad?.(title || (openapi ?? asyncapi)!.doc.info.title);
       })
       .catch((e: Error) => current && setState({ status: "error", message: e.message }));
     return () => {
@@ -183,7 +185,8 @@ export function App({ openapi: openapiUrl, asyncapi: asyncapiUrl, routing, root,
   return (
     <RootContext.Provider value={root}>
       <NavigateContext.Provider value={navigate}>
-        <div class="host" onClick={onClick}>
+        {/* An empty title: the element's `title` attribute names the API, it isn't a tooltip for all of it. */}
+        <div class="host" title="" onClick={onClick}>
           {state.status === "loading" ? (
             <div class="loading" role="status" aria-label="Loading">
               <span class="loading-name">apiquity</span>
@@ -192,7 +195,7 @@ export function App({ openapi: openapiUrl, asyncapi: asyncapiUrl, routing, root,
           ) : state.status === "error" ? (
             <p class="msg error">Failed to load spec: {state.message}</p>
           ) : (
-            <Viewer openapi={state.openapi} asyncapi={state.asyncapi} hash={hash} routing={routing} urls={{ openapi: openapiUrl, asyncapi: asyncapiUrl }} />
+            <Viewer openapi={state.openapi} asyncapi={state.asyncapi} title={title} hash={hash} routing={routing} urls={{ openapi: openapiUrl, asyncapi: asyncapiUrl }} />
           )}
         </div>
       </NavigateContext.Provider>
@@ -200,9 +203,10 @@ export function App({ openapi: openapiUrl, asyncapi: asyncapiUrl, routing, root,
   );
 }
 
-function Viewer({ openapi, asyncapi, hash, routing, urls }: {
+function Viewer({ openapi, asyncapi, title: titleAttr, hash, routing, urls }: {
   openapi?: Loaded<OpenApiDoc>;
   asyncapi?: Loaded<AsyncApiDoc>;
+  title?: string;
   hash: string;
   routing: Routing;
   urls: Partial<Record<SpecKind, string>>;
@@ -223,8 +227,8 @@ function Viewer({ openapi, asyncapi, hash, routing, urls }: {
   const split = !!(selected || selectedOp || source);
   const navigate = useContext(NavigateContext);
   const home = "";
-  // The API's title: OpenAPI's when there is one, even if AsyncAPI's differs.
-  const title = (openapi ?? asyncapi)!.doc.info.title;
+  // The API's title: the `title` attribute, else OpenAPI's when there is one, even if AsyncAPI's differs.
+  const title = titleAttr || (openapi ?? asyncapi)!.doc.info.title;
   // The page a search was started from, to return to when it is cleared. Kept after opening a result,
   // so a search reached again with Back still knows where it came from.
   const searchedFrom = useRef<string | null>(null);
