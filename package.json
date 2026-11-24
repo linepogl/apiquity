@@ -1,6 +1,6 @@
 {
   "name": "@linepogl/apiquity",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A web component that displays OpenAPI and AsyncAPI documents.",
   "license": "MIT",
   "repository": {
@@ -25,7 +25,7 @@
     "start-asyncapi": "node server/server.ts spec/asyncapi.yaml",
     "start-live": "node server/server.ts http://127.0.0.1:8000/api/docs/openapi.json http://127.0.0.1:8000/api/docs/asyncapi.yaml",
     "typecheck": "tsc --noEmit",
-    "release": "npm run typecheck && npm run build && npm publish && git push --follow-tags"
+    "release": "npm run typecheck && npm run build && npm publish && echo https://www.npmjs.com/package/@linepogl/apiquity && git push --follow-tags"
   },
   "devDependencies": {
     "@preact/preset-vite": "^2.10.6",
