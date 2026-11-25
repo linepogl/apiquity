@@ -31,12 +31,9 @@ import {
 } from "./asyncapi.ts";
 import { load as loadYaml } from "js-yaml";
 
-/** A loaded spec and the name of its source file. */
+/** A loaded spec. */
 interface Loaded<T> {
   doc: T;
-  fileName: string;
-  /** The file as written, shown as the spec's source. */
-  text: string;
 }
 
 type State =
@@ -79,9 +76,7 @@ async function loadSpec<T>(url: string, key: SpecKind): Promise<Loaded<T>> {
     doc = loadYaml(text) as Record<string, unknown>;
   }
   if (!doc || typeof doc !== "object" || !doc[key]) throw new Error(`${url}: not an ${key === "openapi" ? "OpenAPI" : "AsyncAPI"} document`);
-  // The file name, for the raw-file link: the last segment of the URL.
-  const fileName = decodeURIComponent(new URL(url, location.href).pathname.split("/").pop() || url);
-  return { doc: doc as T, fileName, text };
+  return { doc: doc as T };
 }
 
 /** The app's root node, to find its own elements (they're in a shadow root, out of `document`'s reach). */
@@ -220,11 +215,7 @@ function Viewer({ openapi, asyncapi, title: titleAttr, hash, routing, urls }: {
   const asyncDoc = asyncapi?.doc;
   const selected = doc && anchor ? listEndpoints(doc).find((ep) => endpointAnchor(ep) === anchor) : undefined;
   const selectedOp = asyncDoc && anchor ? listOperations(asyncDoc).find((op) => operationAnchor(op) === anchor) : undefined;
-  // `#source/openapi` / `#source/asyncapi`: a spec's file, as written, in the main area.
-  const sourceKind: SpecKind | undefined =
-    openapi && anchor === `${SOURCE_PREFIX}openapi` ? "openapi" : asyncapi && anchor === `${SOURCE_PREFIX}asyncapi` ? "asyncapi" : undefined;
-  const source = sourceKind === "openapi" ? openapi : sourceKind === "asyncapi" ? asyncapi : undefined;
-  const split = !!(selected || selectedOp || source);
+  const split = !!(selected || selectedOp);
   const navigate = useContext(NavigateContext);
   const home = "";
   // The API's title: the `title` attribute, else OpenAPI's when there is one, even if AsyncAPI's differs.
@@ -256,14 +247,13 @@ function Viewer({ openapi, asyncapi, title: titleAttr, hash, routing, urls }: {
 
   return (
     <div class={split ? "app app-split" : "app"}>
-      {/* A spec's source takes the whole width: no list beside it. */}
-      <div class={split ? `layout split${source ? " no-list" : ""}` : "layout"}>
+      <div class={split ? "layout split" : "layout"}>
         <header>
           {/* The API's title, which leads to the home page. */}
           <a class="app-title" href="#">{title}</a>
-          {/* The spec formats loaded, with their versions: each opens its spec's source (again: back home). */}
-          {openapi && <SourceTag kind="openapi" label={`OpenAPI ${openapi.doc.openapi}`} active={sourceKind === "openapi"} />}
-          {asyncapi && <SourceTag kind="asyncapi" label={`AsyncAPI ${asyncapi.doc.asyncapi}`} active={sourceKind === "asyncapi"} />}
+          {/* The spec formats loaded, with their versions: each opens its spec's file in a new tab. */}
+          {openapi && <SourceTag url={urls.openapi!} label={`OpenAPI ${openapi.doc.openapi}`} />}
+          {asyncapi && <SourceTag url={urls.asyncapi!} label={`AsyncAPI ${asyncapi.doc.asyncapi}`} />}
           <SearchBox query={query} onChange={search} placeholder={openapi && asyncapi ? "Search endpoints and operations" : openapi ? "Search endpoints" : "Search operations"} />
         </header>
         {searching ? (
@@ -273,14 +263,9 @@ function Viewer({ openapi, asyncapi, title: titleAttr, hash, routing, urls }: {
             <ApiList openapi={doc} asyncapi={asyncDoc} query={query} />
           </nav>
         ) : (
-          !source && (
-            <nav>
-              <ApiList openapi={doc} asyncapi={asyncDoc} selected={selected} selectedOp={selectedOp} tab={tab} />
-            </nav>
-          )
-        )}
-        {source && sourceKind && (
-          <SourcePanel text={source.text} url={urls[sourceKind]!} fileName={source.fileName} />
+          <nav>
+            <ApiList openapi={doc} asyncapi={asyncDoc} selected={selected} selectedOp={selectedOp} tab={tab} />
+          </nav>
         )}
         {doc && selected && <EndpointPanel key={anchor} doc={doc} ep={selected} tab={tab} specUrl={urls.openapi!} />}
         {asyncDoc && selectedOp && <OperationPanel key={anchor} doc={asyncDoc} op={selectedOp} tab={tab} />}
@@ -292,14 +277,28 @@ function Viewer({ openapi, asyncapi, title: titleAttr, hash, routing, urls }: {
 /**
  * Searches the endpoints / operations: the query goes to the address (`#?<query>`) and the results
  * replace the list, centered. Every word must appear (ignoring case) in one of an item's texts (path, method,
- * summary, tag…). Escape, or emptying it, returns to the page the search was started from. Typing anywhere goes to it.
+ * summary, tag…). Escape (anywhere), or emptying it, returns to the page the search was started from.
+ * Typing anywhere goes to it.
  */
 function SearchBox({ query, onChange, placeholder }: { query: string; onChange: (q: string) => void; placeholder: string }) {
   const input = useRef<HTMLInputElement>(null);
+  // The latest onChange, for the document's key listener, set up once.
+  const change = useRef(onChange);
+  change.current = onChange;
+  // Escape empties the box and takes the focus out of it, wherever the focus is.
+  const escape = () => {
+    if (input.current?.value) change.current("");
+    input.current?.blur();
+  };
   // Typing anywhere goes to the box: a character key moves the focus there (cursor at the end) and the
   // character lands in it. Not space (it scrolls the page), shortcuts, or keys typed in another field.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // In the box itself, its own handler has already done it.
+      if (e.key === "Escape") {
+        if (!e.composedPath().includes(input.current!)) escape();
+        return;
+      }
       if (e.key.length !== 1 || e.key === " " || e.ctrlKey || e.metaKey || e.altKey || e.isComposing || e.defaultPrevented) return;
       // composedPath() sees through shadow roots, where e.target would only be the host element.
       const typing = e.composedPath().some(
@@ -332,7 +331,7 @@ function SearchBox({ query, onChange, placeholder }: { query: string; onChange: 
           if (e.key !== "Escape") return;
           // The browser would also clear a search box on Escape, emptying it a second time.
           e.preventDefault();
-          onChange("");
+          escape();
         }}
       />
     </span>
@@ -346,40 +345,11 @@ function matches(query: string, texts: (string | undefined)[]): boolean {
   return words.every((w) => haystack.includes(w));
 }
 
-/** Anchor prefix of a spec's source page: `#source/openapi`, `#source/asyncapi`. */
-const SOURCE_PREFIX = "source/";
-
-/** A spec format tag in the title bar ("OpenAPI 3.1.0"): opens the spec's source, or closes it when open. */
-function SourceTag({ kind, label, active }: { kind: SpecKind; label: string; active: boolean }) {
+/** A spec format tag in the title bar ("OpenAPI 3.1.0"): opens the spec's file, as is, in a new tab. */
+function SourceTag({ url, label }: { url: string; label: string }) {
   return (
-    <a class={`badge source-tag${active ? " active" : ""}`} href={active ? "#" : `#${SOURCE_PREFIX}${kind}`} aria-current={active ? "page" : undefined}>
+    <a class="badge source-tag" href={url} target="_blank" rel="noopener" title="Open the file in a new tab">
       {label}
-    </a>
-  );
-}
-
-/** A spec's file as written, in the main area, with a download button floating over it (no title: the tag says which). */
-function SourcePanel({ text, url, fileName }: { text: string; url: string; fileName: string }) {
-  return (
-    <article class="panel">
-      {/* Sticks to the top right of the area while the file scrolls under it. */}
-      <div class="source-download-anchor">
-        <a class="source-download" href={url} download={fileName} title={`Download ${fileName}`} aria-label={`Download ${fileName}`}>
-          <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true">
-            <path d="M8 2v8.5M4.5 7 8 10.5 11.5 7M3 13.5h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-        </a>
-      </div>
-      <pre class="raw-schema source"><code>{text}</code></pre>
-    </article>
-  );
-}
-
-/** Link to a spec file as is, by its name, opened in a new tab (not shown for now). */
-function RawLink({ url, fileName }: { url: string; fileName: string }) {
-  return (
-    <a class="file-link" href={url} target="_blank" rel="noopener" title="Open the file in a new tab">
-      {fileName}
     </a>
   );
 }
